@@ -15,8 +15,8 @@ const (
 )
 
 // totalWidth is the full width of the table separator line.
-// label + 4 token cols (each with 2-char gap) + cost col
-var totalWidth = colLabel + 4*(colTokens+1) + colCost
+// 6 fields separated by 5 spaces: label + 4 token cols + cost col
+var totalWidth = colLabel + 4*colTokens + 5 + colCost
 
 func repeatChar(ch byte, n int) string {
 	return strings.Repeat(string(ch), n)
