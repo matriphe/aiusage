@@ -27,20 +27,20 @@ func main() {
 
 	records := parseAllProjects(flags.ClaudeDir)
 	if len(records) == 0 {
-		fmt.Println("No usage data found.")
-		return
+		fmt.Fprintln(os.Stderr, "No usage data found.")
+		os.Exit(1)
 	}
 
 	records = filterByDate(records, flags.Since, flags.Until)
 	if len(records) == 0 {
-		fmt.Println("No usage data found for the specified period.")
-		return
+		fmt.Fprintln(os.Stderr, "No usage data found for the specified period.")
+		os.Exit(1)
 	}
 
 	records = filterByProject(records, flags.Project)
 	if len(records) == 0 {
-		fmt.Printf("No usage data found for project %q.\n", flags.Project)
-		return
+		fmt.Fprintf(os.Stderr, "No usage data found for project %q.\n", flags.Project)
+		os.Exit(1)
 	}
 
 	stats := aggregate(records, flags)
