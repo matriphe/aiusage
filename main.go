@@ -22,6 +22,7 @@ func main() {
 	flag.BoolVar(&flags.Daily, "daily", false, "Show daily breakdown")
 	flag.BoolVar(&flags.Model, "model", false, "Show per-model breakdown")
 	flag.StringVar(&flags.ClaudeDir, "claude-dir", defaultClaudeDir, "Path to Claude data directory")
+	flag.StringVar(&flags.Project, "project", "", "Filter by project name (substring match)")
 	flag.Parse()
 
 	records := parseAllProjects(flags.ClaudeDir)
@@ -33,6 +34,12 @@ func main() {
 	records = filterByDate(records, flags.Since, flags.Until)
 	if len(records) == 0 {
 		fmt.Println("No usage data found for the specified period.")
+		return
+	}
+
+	records = filterByProject(records, flags.Project)
+	if len(records) == 0 {
+		fmt.Printf("No usage data found for project %q.\n", flags.Project)
 		return
 	}
 

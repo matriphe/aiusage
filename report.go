@@ -85,6 +85,20 @@ func formatLabelCostRow(label string, cost float64) string {
 	return label + strings.Repeat(" ", padWidth) + costStr
 }
 
+func filterByProject(records []MessageRecord, project string) []MessageRecord {
+	if project == "" {
+		return records
+	}
+	target := strings.ToLower(project)
+	var filtered []MessageRecord
+	for _, r := range records {
+		if strings.Contains(strings.ToLower(r.Project), target) {
+			filtered = append(filtered, r)
+		}
+	}
+	return filtered
+}
+
 func filterByDate(records []MessageRecord, since, until string) []MessageRecord {
 	var sinceTime, untilTime time.Time
 	if since != "" {

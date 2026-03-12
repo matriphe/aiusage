@@ -35,9 +35,10 @@ type ModelStats struct {
 }
 
 type CLIFlags struct {
-	Since    string
-	Until    string
-	Daily    bool
-	Model    bool
+	Since     string
+	Until     string
+	Daily     bool
+	Model     bool
 	ClaudeDir string
+	Project   string
 }
