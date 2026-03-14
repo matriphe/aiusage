@@ -8,15 +8,16 @@ import (
 )
 
 const (
-	colLabel    = 38 // left-aligned project/model name
-	colTokens   = 9  // right-aligned token columns
-	colCost     = 12 // right-aligned cost column
-	colDate     = 12 // left-aligned date column
+	colLabel   = 38 // left-aligned project/model name
+	colTokens  = 9  // right-aligned token columns
+	colCost    = 12 // right-aligned cost column
+	colDate    = 12 // left-aligned date column
+	colPercent = 8  // right-aligned percentage columns
 )
 
 // totalWidth is the full width of the table separator line.
-// 6 fields separated by 5 spaces: label + 4 token cols + cost col
-var totalWidth = colLabel + 4*colTokens + 5 + colCost
+// 8 fields separated by 7 spaces: label + 4 token cols + cost col + 2 percentage cols
+var totalWidth = colLabel + 4*colTokens + 5 + colCost + 2 + 2*colPercent
 
 func repeatChar(ch byte, n int) string {
 	return strings.Repeat(string(ch), n)
@@ -53,25 +54,40 @@ func formatCost(cost float64) string {
 	return fmt.Sprintf("%s%s.%02d", prefix, s, frac)
 }
 
-func formatRow(label string, labelWidth int, input, output, cacheRd, cacheWr int64, cost float64) string {
-	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s",
+func formatPercent(p float64) string {
+	if p < 0 {
+		return ""
+	}
+	return fmt.Sprintf("%.1f%%", p*100)
+}
+
+func formatRow(label string, labelWidth int, input, output, cacheRd, cacheWr int64, cost float64, totalPct, projectPct float64) string {
+	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
 		labelWidth, label,
 		colTokens, formatTokens(input),
 		colTokens, formatTokens(output),
 		colTokens, formatTokens(cacheRd),
 		colTokens, formatTokens(cacheWr),
 		colCost, formatCost(cost),
+		colPercent, formatPercent(totalPct),
+		colPercent, formatPercent(projectPct),
 	)
 }
 
-func formatHeaderRow(label string, labelWidth int) string {
-	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s",
+func formatHeaderRow(label string, labelWidth int, showProjectPct bool) string {
+	projectHeader := "%Project"
+	if !showProjectPct {
+		projectHeader = ""
+	}
+	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
 		labelWidth, label,
 		colTokens, "Input",
 		colTokens, "Output",
 		colTokens, "Cache Rd",
 		colTokens, "Cache Wr",
 		colCost, "Cost",
+		colPercent, "%Total",
+		colPercent, projectHeader,
 	)
 }
 
@@ -83,6 +99,21 @@ func formatLabelCostRow(label string, cost float64) string {
 		padWidth = 1
 	}
 	return label + strings.Repeat(" ", padWidth) + costStr
+}
+
+// formatLabelCostRowWithPercents prints a label with cost and optional percentage columns.
+// Token columns are left blank so cost and percentages align with data rows.
+func formatLabelCostRowWithPercents(label string, cost float64, totalPct, projectPct float64) string {
+	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
+		colLabel, label,
+		colTokens, "",
+		colTokens, "",
+		colTokens, "",
+		colTokens, "",
+		colCost, formatCost(cost),
+		colPercent, formatPercent(totalPct),
+		colPercent, formatPercent(projectPct),
+	)
 }
 
 func filterByProject(records []MessageRecord, project string) []MessageRecord {
@@ -188,7 +219,7 @@ func addUsage(dst *UsageData, src UsageData) {
 	dst.CacheReadInputTokens += src.CacheReadInputTokens
 }
 
-func printReport(records []MessageRecord, stats []ProjectStats, flags CLIFlags) {
+func printReport(records []MessageRecord, stats []ProjectStats, allStats []ProjectStats, flags CLIFlags) {
 	fmt.Println("Claude Code Usage Report")
 	fmt.Println("========================")
 	fmt.Println()
@@ -198,7 +229,7 @@ func printReport(records []MessageRecord, stats []ProjectStats, flags CLIFlags) 
 	if !flags.Model && !flags.Daily {
 		printSummaryTable(stats)
 	} else if flags.Model && !flags.Daily {
-		printModelTable(stats)
+		printModelTable(stats, allStats, flags)
 	} else if flags.Daily && !flags.Model {
 		printDailyTable(stats)
 	} else {
@@ -207,12 +238,24 @@ func printReport(records []MessageRecord, stats []ProjectStats, flags CLIFlags) 
 }
 
 func printSummaryTable(stats []ProjectStats) {
-	fmt.Println(formatHeaderRow("Project", colLabel))
+	fmt.Println(formatHeaderRow("Project", colLabel, false))
 	fmt.Println(repeatChar('-', totalWidth))
 
 	var total UsageData
 	var totalCost float64
+
+	// Compute overall total cost for percentage calculations.
+	var overallTotalCost float64
 	for _, ps := range stats {
+		overallTotalCost += ps.TotalCost
+	}
+
+	for _, ps := range stats {
+		var pctTotal float64 = -1
+		if overallTotalCost > 0 {
+			pctTotal = ps.TotalCost / overallTotalCost
+		}
+
 		fmt.Println(formatRow(
 			truncate(ps.Name, colLabel),
 			colLabel,
@@ -221,6 +264,8 @@ func printSummaryTable(stats []ProjectStats) {
 			ps.TotalUsage.CacheReadInputTokens,
 			ps.TotalUsage.CacheCreationInputTokens,
 			ps.TotalCost,
+			pctTotal,
+			-1,
 		))
 		addUsage(&total, ps.TotalUsage)
 		totalCost += ps.TotalCost
@@ -234,23 +279,67 @@ func printSummaryTable(stats []ProjectStats) {
 		total.CacheReadInputTokens,
 		total.CacheCreationInputTokens,
 		totalCost,
+		1.0,
+		-1,
 	))
 }
 
-func printModelTable(stats []ProjectStats) {
-	fmt.Println(formatHeaderRow("Project / Model", colLabel))
+// formatModelHeaderRow prints the header for the model table.
+// When showProjectPct is false, the %Project header is omitted while alignment stays consistent.
+func formatModelHeaderRow(showProjectPct bool) string {
+	projectHeader := "%Project"
+	if !showProjectPct {
+		projectHeader = ""
+	}
+	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
+		colLabel, "Project / Model",
+		colTokens, "Input",
+		colTokens, "Output",
+		colTokens, "Cache Rd",
+		colTokens, "Cache Wr",
+		colCost, "Cost",
+		colPercent, "%Total",
+		colPercent, projectHeader,
+	)
+}
+
+func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFlags) {
+	filteredProject := flags.Project != ""
+
+	fmt.Println(formatModelHeaderRow(filteredProject))
 	fmt.Println(repeatChar('-', totalWidth))
 
-	var total UsageData
-	var totalCost float64
+	// Compute grand total cost across all projects for global percentage.
+	var grandTotalCost float64
+	var grandTotalUsage UsageData
+	for _, ps := range allStats {
+		grandTotalCost += ps.TotalCost
+		addUsage(&grandTotalUsage, ps.TotalUsage)
+	}
+
 	for i, ps := range stats {
 		if i > 0 {
 			fmt.Println()
 		}
-		fmt.Println(formatLabelCostRow(ps.Name, ps.TotalCost))
+		var projectPctHeader float64 = -1
+		var projectTotalPct float64 = -1
+		if grandTotalCost > 0 {
+			projectTotalPct = ps.TotalCost / grandTotalCost
+		}
+		// For the project header, show only %Total; leave %Project blank.
+		fmt.Println(formatLabelCostRowWithPercents(ps.Name, ps.TotalCost, projectTotalPct, projectPctHeader))
 
 		models := sortedModelStats(ps.Models)
 		for _, ms := range models {
+			var pctTotal float64 = -1
+			if grandTotalCost > 0 {
+				pctTotal = ms.Cost / grandTotalCost
+			}
+			var pctProject float64 = -1
+			if filteredProject && ps.TotalCost > 0 {
+				pctProject = ms.Cost / ps.TotalCost
+			}
+
 			fmt.Println(formatRow(
 				"  "+ms.Model,
 				colLabel,
@@ -259,28 +348,48 @@ func printModelTable(stats []ProjectStats) {
 				ms.Usage.CacheReadInputTokens,
 				ms.Usage.CacheCreationInputTokens,
 				ms.Cost,
+				pctTotal,
+				pctProject,
 			))
 		}
-		addUsage(&total, ps.TotalUsage)
-		totalCost += ps.TotalCost
+
+		// When filtering by project, emit a SUBTOTAL row with project-level totals.
+		if filteredProject {
+			fmt.Println(formatRow(
+				"SUBTOTAL",
+				colLabel,
+				ps.TotalUsage.InputTokens,
+				ps.TotalUsage.OutputTokens,
+				ps.TotalUsage.CacheReadInputTokens,
+				ps.TotalUsage.CacheCreationInputTokens,
+				ps.TotalCost,
+				projectTotalPct,
+				-1,
+			))
+		}
+
 	}
 	fmt.Println(repeatChar('-', totalWidth))
+
+	// TOTAL row always reflects overall totals across all projects.
 	fmt.Println(formatRow(
 		"TOTAL",
 		colLabel,
-		total.InputTokens,
-		total.OutputTokens,
-		total.CacheReadInputTokens,
-		total.CacheCreationInputTokens,
-		totalCost,
+		grandTotalUsage.InputTokens,
+		grandTotalUsage.OutputTokens,
+		grandTotalUsage.CacheReadInputTokens,
+		grandTotalUsage.CacheCreationInputTokens,
+		grandTotalCost,
+		1.0,
+		-1,
 	))
 }
 
 func printDailyTable(stats []ProjectStats) {
 	dailyLabelWidth := colDate + colLabel
-	dailyTotalWidth := dailyLabelWidth + 4*(colTokens+1) + colCost
+	dailyTotalWidth := dailyLabelWidth + 4*(colTokens+1) + (colCost+1) + colPercent
 
-	fmt.Println(fmt.Sprintf("%-*s %-*s %*s %*s %*s %*s %*s",
+	fmt.Println(fmt.Sprintf("%-*s %-*s %*s %*s %*s %*s %*s %*s",
 		colDate, "Date",
 		colLabel, "Project",
 		colTokens, "Input",
@@ -288,6 +397,7 @@ func printDailyTable(stats []ProjectStats) {
 		colTokens, "Cache Rd",
 		colTokens, "Cache Wr",
 		colCost, "Cost",
+		colPercent, "%Total",
 	))
 	fmt.Println(repeatChar('-', dailyTotalWidth))
 
@@ -299,6 +409,7 @@ func printDailyTable(stats []ProjectStats) {
 		cost    float64
 	}
 	var rows []dailyRow
+	var overallCost float64
 	for _, ps := range stats {
 		dates := sortedKeys(ps.DailyModels)
 		for _, date := range dates {
@@ -310,6 +421,7 @@ func printDailyTable(stats []ProjectStats) {
 				dayCost += ms.Cost
 			}
 			rows = append(rows, dailyRow{date, ps.Name, dayUsage, dayCost})
+			overallCost += dayCost
 		}
 	}
 	sort.Slice(rows, func(i, j int) bool {
@@ -320,7 +432,12 @@ func printDailyTable(stats []ProjectStats) {
 	})
 
 	for _, r := range rows {
-		fmt.Println(fmt.Sprintf("%-*s %-*s %*s %*s %*s %*s %*s",
+		var pctTotal float64 = -1
+		if overallCost > 0 {
+			pctTotal = r.cost / overallCost
+		}
+
+		fmt.Println(fmt.Sprintf("%-*s %-*s %*s %*s %*s %*s %*s %*s",
 			colDate, r.date,
 			colLabel, truncate(r.project, colLabel),
 			colTokens, formatTokens(r.usage.InputTokens),
@@ -328,13 +445,25 @@ func printDailyTable(stats []ProjectStats) {
 			colTokens, formatTokens(r.usage.CacheReadInputTokens),
 			colTokens, formatTokens(r.usage.CacheCreationInputTokens),
 			colCost, formatCost(r.cost),
+			colPercent, formatPercent(pctTotal),
 		))
 	}
 }
 
 func printDailyModelTable(stats []ProjectStats) {
-	fmt.Println(formatHeaderRow("Project / Date / Model", colLabel))
+	fmt.Println(formatHeaderRow("Project / Date / Model", colLabel, true))
 	fmt.Println(repeatChar('-', totalWidth))
+
+	// Compute overall total cost across all projects/dates/models for global percentage.
+	var overallTotalCost float64
+	for _, ps := range stats {
+		dates := sortedKeys(ps.DailyModels)
+		for _, date := range dates {
+			for _, ms := range ps.DailyModels[date] {
+				overallTotalCost += ms.Cost
+			}
+		}
+	}
 
 	for i, ps := range stats {
 		if i > 0 {
@@ -353,6 +482,11 @@ func printDailyModelTable(stats []ProjectStats) {
 			fmt.Println(formatLabelCostRow("  "+date, dayCost))
 
 			for _, ms := range models {
+				var pctTotal float64 = -1
+				if overallTotalCost > 0 {
+					pctTotal = ms.Cost / overallTotalCost
+				}
+
 				fmt.Println(formatRow(
 					"    "+ms.Model,
 					colLabel,
@@ -361,6 +495,8 @@ func printDailyModelTable(stats []ProjectStats) {
 					ms.Usage.CacheReadInputTokens,
 					ms.Usage.CacheCreationInputTokens,
 					ms.Cost,
+					pctTotal,
+					-1,
 				))
 			}
 		}
