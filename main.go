@@ -37,12 +37,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	records = filterByProject(records, flags.Project)
-	if len(records) == 0 {
+	// Compute overall (unfiltered) stats for global totals.
+	allStats := aggregate(records, flags)
+
+	// Apply project filter for the main report view, if requested.
+	filteredRecords := filterByProject(records, flags.Project)
+	if len(filteredRecords) == 0 {
 		fmt.Fprintf(os.Stderr, "No usage data found for project %q.\n", flags.Project)
 		os.Exit(1)
 	}
 
-	stats := aggregate(records, flags)
-	printReport(records, stats, flags)
+	stats := aggregate(filteredRecords, flags)
+	printReport(filteredRecords, stats, allStats, flags)
 }
