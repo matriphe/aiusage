@@ -1,10 +1,12 @@
 package main
 
 import (
-	"flag"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/urfave/cli/v3"
 )
 
 func main() {
@@ -17,36 +19,70 @@ func main() {
 	}
 	defaultClaudeDir := filepath.Join(homeDir, ".claude")
 
-	flag.StringVar(&flags.Since, "since", "", "Start date (YYYY-MM-DD)")
-	flag.StringVar(&flags.Until, "until", "", "End date (YYYY-MM-DD)")
-	flag.BoolVar(&flags.Daily, "daily", false, "Show daily breakdown")
-	flag.BoolVar(&flags.Model, "model", false, "Show per-model breakdown")
-	flag.StringVar(&flags.ClaudeDir, "claude-dir", defaultClaudeDir, "Path to Claude data directory")
-	flag.StringVar(&flags.Project, "project", "", "Filter by project name (substring match)")
-	flag.Parse()
+	cmd := &cli.Command{
+		Name:  "aiusage",
+		Usage: "A CLI tool to analyze standard Claude Cost and Token usage from logs",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:        "since",
+				Usage:       "Start date (YYYY-MM-DD)",
+				Destination: &flags.Since,
+			},
+			&cli.StringFlag{
+				Name:        "until",
+				Usage:       "End date (YYYY-MM-DD)",
+				Destination: &flags.Until,
+			},
+			&cli.BoolFlag{
+				Name:        "daily",
+				Usage:       "Show daily breakdown",
+				Destination: &flags.Daily,
+			},
+			&cli.BoolFlag{
+				Name:        "model",
+				Usage:       "Show per-model breakdown",
+				Destination: &flags.Model,
+			},
+			&cli.StringFlag{
+				Name:        "claude-dir",
+				Usage:       "Path to Claude data directory",
+				Value:       defaultClaudeDir,
+				Destination: &flags.ClaudeDir,
+			},
+			&cli.StringFlag{
+				Name:        "project",
+				Usage:       "Filter by project name (substring match)",
+				Destination: &flags.Project,
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			records := parseAllProjects(flags.ClaudeDir)
+			if len(records) == 0 {
+				return fmt.Errorf("No usage data found.")
+			}
 
-	records := parseAllProjects(flags.ClaudeDir)
-	if len(records) == 0 {
-		fmt.Fprintln(os.Stderr, "No usage data found.")
-		os.Exit(1)
+			records = filterByDate(records, flags.Since, flags.Until)
+			if len(records) == 0 {
+				return fmt.Errorf("No usage data found for the specified period.")
+			}
+
+			// Compute overall (unfiltered) stats for global totals.
+			allStats := aggregate(records, flags)
+
+			// Apply project filter for the main report view, if requested.
+			filteredRecords := filterByProject(records, flags.Project)
+			if len(filteredRecords) == 0 {
+				return fmt.Errorf("No usage data found for project %q.", flags.Project)
+			}
+
+			stats := aggregate(filteredRecords, flags)
+			printReport(filteredRecords, stats, allStats, flags)
+			return nil
+		},
 	}
 
-	records = filterByDate(records, flags.Since, flags.Until)
-	if len(records) == 0 {
-		fmt.Fprintln(os.Stderr, "No usage data found for the specified period.")
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-
-	// Compute overall (unfiltered) stats for global totals.
-	allStats := aggregate(records, flags)
-
-	// Apply project filter for the main report view, if requested.
-	filteredRecords := filterByProject(records, flags.Project)
-	if len(filteredRecords) == 0 {
-		fmt.Fprintf(os.Stderr, "No usage data found for project %q.\n", flags.Project)
-		os.Exit(1)
-	}
-
-	stats := aggregate(filteredRecords, flags)
-	printReport(filteredRecords, stats, allStats, flags)
 }
