@@ -74,6 +74,21 @@ func formatRow(label string, labelWidth int, input, output, cacheRd, cacheWr int
 	)
 }
 
+func formatModelRow(label string, labelWidth int, input, output, cacheRd, cacheWr int64, cost float64, totalPct, projectPct float64, showProjectPct bool) string {
+	if !showProjectPct {
+		return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s",
+			labelWidth, label,
+			colTokens, formatTokens(input),
+			colTokens, formatTokens(output),
+			colTokens, formatTokens(cacheRd),
+			colTokens, formatTokens(cacheWr),
+			colCost, formatCost(cost),
+			colPercent, formatPercent(totalPct),
+		)
+	}
+	return formatRow(label, labelWidth, input, output, cacheRd, cacheWr, cost, totalPct, projectPct)
+}
+
 func formatHeaderRow(label string, labelWidth int, showProjectPct bool) string {
 	projectHeader := "%Project"
 	if !showProjectPct {
@@ -103,7 +118,18 @@ func formatLabelCostRow(label string, cost float64) string {
 
 // formatLabelCostRowWithPercents prints a label with cost and optional percentage columns.
 // Token columns are left blank so cost and percentages align with data rows.
-func formatLabelCostRowWithPercents(label string, cost float64, totalPct, projectPct float64) string {
+func formatLabelCostRowWithPercents(label string, cost float64, totalPct, projectPct float64, showProjectPct bool) string {
+	if !showProjectPct {
+		return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s",
+			colLabel, label,
+			colTokens, "",
+			colTokens, "",
+			colTokens, "",
+			colTokens, "",
+			colCost, formatCost(cost),
+			colPercent, formatPercent(totalPct),
+		)
+	}
 	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
 		colLabel, label,
 		colTokens, "",
@@ -287,9 +313,16 @@ func printSummaryTable(stats []ProjectStats) {
 // formatModelHeaderRow prints the header for the model table.
 // When showProjectPct is false, the %Project header is omitted while alignment stays consistent.
 func formatModelHeaderRow(showProjectPct bool) string {
-	projectHeader := "%Project"
 	if !showProjectPct {
-		projectHeader = ""
+		return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s",
+			colLabel, "Project / Model",
+			colTokens, "Input",
+			colTokens, "Output",
+			colTokens, "Cache Rd",
+			colTokens, "Cache Wr",
+			colCost, "Cost",
+			colPercent, "%Total",
+		)
 	}
 	return fmt.Sprintf("%-*s %*s %*s %*s %*s %*s %*s %*s",
 		colLabel, "Project / Model",
@@ -299,15 +332,20 @@ func formatModelHeaderRow(showProjectPct bool) string {
 		colTokens, "Cache Wr",
 		colCost, "Cost",
 		colPercent, "%Total",
-		colPercent, projectHeader,
+		colPercent, "%Project",
 	)
 }
 
 func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFlags) {
 	filteredProject := flags.Project != ""
 
+	modelTableWidth := totalWidth
+	if !filteredProject {
+		modelTableWidth = totalWidth - colPercent - 1
+	}
+
 	fmt.Println(formatModelHeaderRow(filteredProject))
-	fmt.Println(repeatChar('-', totalWidth))
+	fmt.Println(repeatChar('-', modelTableWidth))
 
 	// Compute grand total cost across all projects for global percentage.
 	var grandTotalCost float64
@@ -327,7 +365,7 @@ func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFla
 			projectTotalPct = ps.TotalCost / grandTotalCost
 		}
 		// For the project header, show only %Total; leave %Project blank.
-		fmt.Println(formatLabelCostRowWithPercents(ps.Name, ps.TotalCost, projectTotalPct, projectPctHeader))
+		fmt.Println(formatLabelCostRowWithPercents(ps.Name, ps.TotalCost, projectTotalPct, projectPctHeader, filteredProject))
 
 		models := sortedModelStats(ps.Models)
 		for _, ms := range models {
@@ -340,7 +378,7 @@ func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFla
 				pctProject = ms.Cost / ps.TotalCost
 			}
 
-			fmt.Println(formatRow(
+			fmt.Println(formatModelRow(
 				"  "+ms.Model,
 				colLabel,
 				ms.Usage.InputTokens,
@@ -350,12 +388,13 @@ func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFla
 				ms.Cost,
 				pctTotal,
 				pctProject,
+				filteredProject,
 			))
 		}
 
 		// When filtering by project, emit a SUBTOTAL row with project-level totals.
 		if filteredProject {
-			fmt.Println(formatRow(
+			fmt.Println(formatModelRow(
 				"SUBTOTAL",
 				colLabel,
 				ps.TotalUsage.InputTokens,
@@ -364,15 +403,16 @@ func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFla
 				ps.TotalUsage.CacheCreationInputTokens,
 				ps.TotalCost,
 				projectTotalPct,
-				-1,
+				1.0,
+				filteredProject,
 			))
 		}
 
 	}
-	fmt.Println(repeatChar('-', totalWidth))
+	fmt.Println(repeatChar('-', modelTableWidth))
 
 	// TOTAL row always reflects overall totals across all projects.
-	fmt.Println(formatRow(
+	fmt.Println(formatModelRow(
 		"TOTAL",
 		colLabel,
 		grandTotalUsage.InputTokens,
@@ -382,6 +422,7 @@ func printModelTable(stats []ProjectStats, allStats []ProjectStats, flags CLIFla
 		grandTotalCost,
 		1.0,
 		-1,
+		filteredProject,
 	))
 }
 
